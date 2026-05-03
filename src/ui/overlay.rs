@@ -49,7 +49,7 @@ impl Overlay {
             selected_cap_idx: None,
             selected_format_idx: 0,
             device_switch_requested: false,
-            logs: vec!["Welcome to Kaptura v1.0".to_string()],
+            logs: vec!["Welcome to Kaptura v1.1.0".to_string()],
             show_logs: false,
         }
     }
@@ -157,12 +157,14 @@ impl Overlay {
                     .selected_text(match self.selected_format_idx {
                         1 => "MJPG",
                         2 => "YUY2",
+                        3 => "NV12",
                         _ => "Auto",
                     })
                     .show_ui(ui, |ui| {
                         ui.selectable_value(&mut self.selected_format_idx, 0, "Auto");
                         ui.selectable_value(&mut self.selected_format_idx, 1, "MJPG");
                         ui.selectable_value(&mut self.selected_format_idx, 2, "YUY2");
+                        ui.selectable_value(&mut self.selected_format_idx, 3, "NV12");
                     });
                 if prev_f != self.selected_format_idx { self.device_switch_requested = true; }
 

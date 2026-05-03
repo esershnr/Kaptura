@@ -1,4 +1,4 @@
-# 🚀 Kaptura 1.0 - Video Capture Utility
+# 🚀 Kaptura 1.1.0 - Video Capture Utility
 
 Kaptura is a high-performance, low-latency **UVC (USB Video Class)** capture interface designed for Windows. It is optimized for gaming capture cards and professional webcams, providing a minimalist yet powerful tool for creators.
 
@@ -15,17 +15,30 @@ Kaptura is a high-performance, low-latency **UVC (USB Video Class)** capture int
 ### 🛡️ Parasite & Glitch Prevention
 Many capture cards experience audio "crackling" or "parasites" due to USB bandwidth or clock sync issues. Kaptura solves this using a custom **100ms Leaky Downstream Buffer** architecture. This ensures audio stays fresh and smooth by dropping stale packets while maintaining minimal latency.
 
-### 👤 Stealth Mode (Designed for Discord)
-Originally developed for **Discord streaming**, Stealth Mode allows you to share or monitor content discreetly. When activated:
-- Window borders and title bars are hidden.
-- Taskbar presence is minimized.
-- Provides a clean, borderless video-only view, perfect for screen sharing without UI clutter.
+### 👤 Stealth Mode (v1.1.0 - Win32 Ghost Mode)
+Designed for **Discord streaming**, Stealth Mode now utilizes low-level Win32 API calls for the ultimate capture experience:
+- **Invisible & Click-through**: The window remains active for capture but is invisible and ignores mouse clicks for the user.
+- **Borderless Fullscreen**: Automatically covers the entire screen to provide high-quality, bar-free streams.
+- **Discord Optimized**: Prevents stream freezing or pausing by remaining technically "visible" to the DWM.
 
-### ⚡ Intelligent Hardware Priority
-Kaptura automatically scans for devices and prioritizes those with keywords like **"USB3", "Capture", or "Game"**, initializing the stream instantly upon startup.
+### ⚡ Intelligent Hardware Priority & NV12
+Kaptura prioritizes hardware with keywords like **"USB3", "Capture", or "Game"** and now includes native **NV12 format selection** for optimized budget capture card performance.
 
-### 🖱️ UI Toggle via Double-Click
-Double-click anywhere on the video feed to instantly hide or show the control panel for an uninterrupted viewing experience.
+### 🎨 Pixel Formats & Hardware Optimization
+Kaptura provides explicit control over the hardware's pixel output to help you balance visual quality and system stability:
+
+- **NV12 (Recommended)**: The most balanced format for modern capture. It offers high performance and low latency with minimal CPU overhead. Best for 1080p/60fps on most budget cards.
+- **YUY2 (High Fidelity)**: Provides the richest, uncompressed color data. However, due to its massive USB bandwidth requirements, it can cause audio "jitter" or "crackling" on low-end hardware or USB 2.0 ports. While Kaptura’s custom buffering minimizes this, it remains a hardware-bound limitation. Use this for maximum quality if your hardware allows.
+- **MJPG (Compatibility)**: Uses hardware compression. Ideal for achieving high frame rates on older USB 2.0 capture cards, at the cost of slight compression artifacts.
+
+### ⌨️ Shortcuts & Controls
+
+| Shortcut | Action | Scope |
+| :--- | :--- | :--- |
+| `SHIFT + ESC` | **Exit Stealth Mode** | Global (Stealth only) |
+| `SHIFT + F10` | **Toggle UI Visibility** | Global (Always) |
+| `Double-Click` | **Toggle UI Visibility** | Local (Normal only) |
+| `ESC` | **Close Application** | Local (Normal only) |
 
 ---
 

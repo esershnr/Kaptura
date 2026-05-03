@@ -43,7 +43,7 @@ impl PipelineController {
 
         let video_src = match video_device {
             Some(ref name) => {
-                let is_logitech = name.to_lowercase().contains("logitech")
+                let _is_logitech = name.to_lowercase().contains("logitech")
                     || name.to_lowercase().contains("c922");
 
                 // Build caps constraint suffix (comma-prefixed, appended after media type)
@@ -60,21 +60,14 @@ impl PipelineController {
                         format!("mfvideosrc device-name=\"{}\" ! image/jpeg{} ! jpegdec", name, res_fps)
                     }
                     Some("YUY2") => {
-                        // Explicit YUY2 raw video
                         format!("mfvideosrc device-name=\"{}\" ! video/x-raw,format=YUY2{}", name, res_fps)
                     }
+                    Some("NV12") => {
+                        format!("mfvideosrc device-name=\"{}\" ! video/x-raw,format=NV12{}", name, res_fps)
+                    }
                     _ => {
-                        // Auto mode: ksvideosrc + MJPG to unlock 60fps on Logitech
-                        if !res_fps.is_empty() {
-                            // Specific res/fps requested
-                            format!("mfvideosrc device-name=\"{}\" ! image/jpeg{} ! jpegdec", name, res_fps)
-                        } else if is_logitech {
-                            // Known Logitech: KS + MJPG to escape Windows MF 15fps limit
-                            format!("mfvideosrc device-name=\"{}\" ! image/jpeg ! jpegdec", name)
-                        } else {
-                            // Generic device
-                            format!("mfvideosrc device-name=\"{}\" ! decodebin", name)
-                        }
+                        // Default MJPG for 60fps stability
+                        format!("mfvideosrc device-name=\"{}\" ! image/jpeg{} ! jpegdec", name, res_fps)
                     }
                 }
             }
@@ -83,9 +76,11 @@ impl PipelineController {
 
         let audio_src = match audio_device {
             Some(ref guid) if !guid.is_empty() => {
-                // 100ms buffer (leaky=downstream) reduces audio parasite/glitch from capture cards
+                // Aggressive Real-Time Strategy:
+                // - short 100ms queue with leaky=downstream: if audio falls behind, DROP IT and jump to real-time.
+                // - sync=false: don't fight with clock drift, just play the freshest samples.
                 format!(
-                    "wasapi2src device=\"{}\" low-latency=true ! queue max-size-time=100000000 leaky=downstream ! audioconvert ! audioresample ! volume name=vol ! directsoundsink sync=false",
+                    "wasapi2src device=\"{}\" low-latency=true ! queue max-size-time=100000000 leaky=downstream ! audioconvert ! audioresample quality=4 ! volume name=vol ! wasapi2sink sync=false low-latency=true",
                     guid
                 )
             }

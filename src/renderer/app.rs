@@ -1,11 +1,25 @@
 use crossbeam_channel::{Receiver, Sender};
 use std::sync::Arc;
+use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::WindowBuilder;
 
 use crate::media::pipeline::{DeviceInfo, PipelineController};
 use crate::ui::overlay::Overlay;
+ 
+#[cfg(target_os = "windows")]
+fn get_hwnd(window: &winit::window::Window) -> *mut std::os::raw::c_void {
+    if let Ok(handle) = window.window_handle() {
+        if let RawWindowHandle::Win32(win32_handle) = handle.as_raw() {
+            win32_handle.hwnd.get() as *mut _
+        } else {
+            std::ptr::null_mut()
+        }
+    } else {
+        std::ptr::null_mut()
+    }
+}
 
 pub struct App {
     pipeline: PipelineController,
@@ -122,9 +136,10 @@ impl App {
         let icon = Self::load_icon();
         let window = Arc::new(
             WindowBuilder::new()
-                .with_title("Kaptura 1.0 - Video Capture Utility")
+                .with_title("Kaptura v1.1.0 - Video Capture Utility")
                 .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 720.0))
                 .with_window_icon(icon)
+                .with_transparent(true)
                 .build(&event_loop)
                 .unwrap(),
         );
@@ -344,7 +359,63 @@ impl App {
                 }
             }
 
-            match event {
+            // Global Hotkey Checks (Win32 specific)
+        #[cfg(target_os = "windows")]
+        {
+            unsafe {
+                #[link(name = "user32")]
+                unsafe extern "system" {
+                    fn GetAsyncKeyState(v_key: i32) -> i16;
+                }
+                const VK_ESCAPE: i32 = 0x1B;
+                const VK_F10: i32 = 0x79;
+                const VK_LSHIFT: i32 = 0xA0;
+                const VK_RSHIFT: i32 = 0xA1;
+
+                let esc_pressed = (GetAsyncKeyState(VK_ESCAPE) as u16 & 0x8000) != 0;
+                let f10_pressed = (GetAsyncKeyState(VK_F10) as u16 & 0x8000) != 0;
+                let shift_pressed = ((GetAsyncKeyState(VK_LSHIFT) as u16 & 0x8000) != 0) 
+                                 || ((GetAsyncKeyState(VK_RSHIFT) as u16 & 0x8000) != 0);
+                
+                static mut ESC_WAS_DOWN: bool = false;
+                static mut F10_WAS_DOWN: bool = false;
+
+                // 1. UI Toggle (Works ALWAYS)
+                if shift_pressed && f10_pressed && !F10_WAS_DOWN {
+                    overlay.show_ui = !overlay.show_ui;
+                }
+                F10_WAS_DOWN = f10_pressed;
+
+                // 2. Stealth Exit (Works only in Stealth Mode)
+                if overlay.stealth_mode && shift_pressed && esc_pressed && !ESC_WAS_DOWN {
+                    overlay.stealth_mode = false;
+                    
+                    window.set_fullscreen(None);
+                    window.set_window_level(winit::window::WindowLevel::Normal);
+                    window.set_outer_position(winit::dpi::PhysicalPosition::new(100, 100));
+                    let _ = window.request_inner_size(winit::dpi::PhysicalSize::new(1280, 720));
+
+                    let hwnd = get_hwnd(&window);
+                    if !hwnd.is_null() {
+                        unsafe extern "system" {
+                            fn GetWindowLongW(hwnd: *mut std::os::raw::c_void, index: i32) -> isize;
+                            fn SetWindowLongW(hwnd: *mut std::os::raw::c_void, index: i32, new_long: isize) -> isize;
+                        }
+                        const GWL_EXSTYLE: i32 = -20;
+                        const WS_EX_LAYERED: isize = 0x00080000;
+                        const WS_EX_TRANSPARENT: isize = 0x00000020;
+
+                        let mut style = GetWindowLongW(hwnd, GWL_EXSTYLE);
+                        style &= !(WS_EX_LAYERED | WS_EX_TRANSPARENT);
+                        SetWindowLongW(hwnd, GWL_EXSTYLE, style);
+                    }
+                    window.focus_window();
+                }
+                ESC_WAS_DOWN = esc_pressed;
+            }
+        }
+
+        match event {
                 Event::WindowEvent {
                     event: WindowEvent::CloseRequested,
                     ..
@@ -364,363 +435,421 @@ impl App {
                     event: WindowEvent::RedrawRequested,
                     ..
                 } => {
-                    // Handle fullscreen request from UI
-                    if overlay.fullscreen_requested {
-                        overlay.fullscreen_requested = false;
-                        let is_fullscreen = window.fullscreen().is_some();
-                        if is_fullscreen {
-                            window.set_fullscreen(None);
-                        } else {
-                            window
-                                .set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
-                        }
-                    }
-
-                    // Handle Stealth Mode request
-                    if overlay.stealth_mode_requested {
-                        overlay.stealth_mode_requested = false;
-                        overlay.stealth_mode = !overlay.stealth_mode;
-
-                        if overlay.stealth_mode {
-                            // Stealth mode: Off-screen, audio stays on for Discord!
-                            window.set_outer_position(winit::dpi::PhysicalPosition::new(
-                                10000, 10000,
-                            ));
-                        } else {
-                            // Restore window position
-                            window.set_outer_position(winit::dpi::PhysicalPosition::new(100, 100));
-                        }
-                    }
-
-                    // Handle Device Switch request
-                    if overlay.device_switch_requested {
-                        overlay.device_switch_requested = false;
-
-                        let v_id = overlay.selected_video_idx.and_then(|idx| {
-                            video_infos_local.get(idx).map(|d| d.internal_id.clone())
-                        });
-
-                        // Detect if Video changed to trigger Auto-Match
-                        let mut a_id = overlay.selected_audio_idx.and_then(|idx| {
-                            audio_infos_local.get(idx).map(|d| d.internal_id.clone())
-                        });
-
-                        if last_v_idx != overlay.selected_video_idx {
-                            // Video changed! Trigger Auto-Match
-                            if let Some(ref v_name) = v_id {
-                                if let Some(matched_id) = Self::match_audio_for_video(
-                                    v_name,
-                                    &audio_infos_local,
-                                    self.log_sender.clone(),
-                                ) {
-                                    // Update overlay to reflect matched audio
-                                    overlay.selected_audio_idx = audio_infos_local
-                                        .iter()
-                                        .position(|d| d.internal_id == matched_id);
-                                    a_id = Some(matched_id);
-                                } else {
-                                    overlay.selected_audio_idx = None;
-                                    a_id = None;
-                                }
-                            }
-                            last_v_idx = overlay.selected_video_idx;
-                        }
-
-                        // Sync caps list when video device changes
-                        if let Some(idx) = overlay.selected_video_idx {
-                            let new_caps = video_infos_local[idx].caps.clone();
-                            if overlay.supported_caps != new_caps {
-                                overlay.supported_caps = new_caps;
-                                overlay.selected_cap_idx = None; // Reset to Auto
-                            }
-                        }
-
-                        // Parse selected resolution and FPS
-                        let mut res = None;
-                        let mut fps = None;
-                        if let Some(cap_idx) = overlay.selected_cap_idx {
-                            if let Some(cap_str) = overlay.supported_caps.get(cap_idx) {
-                                // Format: "1920x1080 @ 60fps"
-                                let parts: Vec<&str> = cap_str.split(" @ ").collect();
-                                if parts.len() == 2 {
-                                    let dims: Vec<&str> = parts[0].split('x').collect();
-                                    if dims.len() == 2 {
-                                        if let (Ok(w), Ok(h)) =
-                                            (dims[0].parse::<i32>(), dims[1].parse::<i32>())
-                                        {
-                                            res = Some((w, h));
-                                        }
-                                    }
-                                    let fps_val =
-                                        parts[1].replace("fps", "").parse::<i32>().unwrap_or(0);
-                                    fps = Some(fps_val);
-                                }
-                            }
-                        }
-
-                        println!(
-                            "Switching to Video: {:?}, Audio: {:?}, Res: {:?}, FPS: {:?}",
-                            v_id, a_id, res, fps
-                        );
-
-                        let fmt_str = match overlay.selected_format_idx {
-                            1 => Some("MJPG"),
-                            2 => Some("YUY2"),
-                            _ => None,
-                        };
-
-                        match PipelineController::new(
-                            v_id,
-                            a_id,
-                            res,
-                            fps,
-                            fmt_str,
-                            self.log_sender.clone(),
-                        ) {
-                            Ok(new_pipeline) => {
-                                current_pipeline = new_pipeline;
-                                receiver = current_pipeline.receiver();
-                                overlay
-                                    .add_log("Pipeline successfully restarted with new settings.");
-                            }
-                            Err(e) => {
-                                overlay.add_log(format!("Failed to switch settings: {}", e));
-                            }
-                        }
-                    }
-
-                    // Update Volume
-                    let current_vol = if overlay.is_muted {
-                        0.0
+                    // Normal redraw path
+                }
+                Event::AboutToWait => {
+                    if overlay.stealth_mode {
+                        // Keep the loop spinning at max speed when hidden to prevent suspension
+                        elwt.set_control_flow(winit::event_loop::ControlFlow::Poll);
                     } else {
-                        overlay.volume as f64
-                    };
-                    current_pipeline.update_adjustments(
-                        overlay.brightness,
-                        overlay.contrast,
-                        overlay.saturation,
-                        overlay.hue,
-                        current_vol as f32,
-                        overlay.is_muted,
-                    );
-
-                    // Drain logs from channel to UI
-                    while let Ok(log_msg) = self.log_receiver.try_recv() {
-                        overlay.add_log(log_msg);
+                        // Standard energy-efficient wait mode
+                        elwt.set_control_flow(winit::event_loop::ControlFlow::Wait);
+                        window.request_redraw();
                     }
+                }
+                _ => {}
+            }
 
-                    // Get the latest frame, discarding older ones in the channel
-                    let mut latest_frame = None;
-                    while let Ok(frame) = receiver.try_recv() {
-                        latest_frame = Some(frame);
-                        frame_counter += 1; // Count real received frames
-                    }
+            // --- HYBRID RENDER BLOCK ---
+            // This runs on EVERY loop iteration where a render is needed.
+            // In Stealth Mode, it runs on every loop to keep Discord updated.
+            let should_render = match event {
+                Event::WindowEvent { event: WindowEvent::RedrawRequested, .. } => true,
+                Event::AboutToWait if overlay.stealth_mode => true,
+                _ => false,
+            };
 
-                    // Update FPS in overlay
-                    if overlay.update_fps(frame_counter) {
-                        frame_counter = 0;
-                    }
-
-                    if let Some(frame) = latest_frame {
-                        let texture_size = wgpu::Extent3d {
-                            width: frame.width,
-                            height: frame.height,
-                            depth_or_array_layers: 1,
-                        };
-
-                        video_size = (frame.width, frame.height);
-
-                        let needs_recreate = video_texture.as_ref().map_or(true, |t| {
-                            t.width() != frame.width || t.height() != frame.height
-                        });
-
-                        if needs_recreate {
-                            let texture = device.create_texture(&wgpu::TextureDescriptor {
-                                size: texture_size,
-                                mip_level_count: 1,
-                                sample_count: 1,
-                                dimension: wgpu::TextureDimension::D2,
-                                format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                                usage: wgpu::TextureUsages::TEXTURE_BINDING
-                                    | wgpu::TextureUsages::COPY_DST,
-                                label: Some("video_texture"),
-                                view_formats: &[],
-                            });
-
-                            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-                            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                                layout: &bind_group_layout,
-                                entries: &[
-                                    wgpu::BindGroupEntry {
-                                        binding: 0,
-                                        resource: wgpu::BindingResource::TextureView(&view),
-                                    },
-                                    wgpu::BindGroupEntry {
-                                        binding: 1,
-                                        resource: wgpu::BindingResource::Sampler(&sampler),
-                                    },
-                                ],
-                                label: Some("video_bind_group"),
-                            });
-
-                            video_texture = Some(texture);
-                            video_bind_group = Some(bind_group);
-                        }
-
-                        if let Some(texture) = &video_texture {
-                            queue.write_texture(
-                                wgpu::ImageCopyTexture {
-                                    texture,
-                                    mip_level: 0,
-                                    origin: wgpu::Origin3d::ZERO,
-                                    aspect: wgpu::TextureAspect::All,
-                                },
-                                &frame.data,
-                                wgpu::ImageDataLayout {
-                                    offset: 0,
-                                    bytes_per_row: Some(4 * frame.width),
-                                    rows_per_image: Some(frame.height),
-                                },
-                                texture_size,
-                            );
-                        }
-                    }
-
-                    let output = match surface.get_current_texture() {
-                        Ok(texture) => texture,
-                        Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {
-                            surface.configure(&device, &config);
-                            return;
-                        }
-                        Err(e) => {
-                            log::error!("Surface error: {:?}", e);
-                            return;
-                        }
-                    };
-
-                    let view = output
-                        .texture
-                        .create_view(&wgpu::TextureViewDescriptor::default());
-                    let mut encoder =
-                        device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                            label: Some("Render Encoder"),
-                        });
-
-                    if let Some(bind_group) = &video_bind_group {
-                        let mut render_pass =
-                            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                label: Some("Video Render Pass"),
-                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                    view: &view,
-                                    resolve_target: None,
-                                    ops: wgpu::Operations {
-                                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                                        store: wgpu::StoreOp::Store,
-                                    },
-                                })],
-                                depth_stencil_attachment: None,
-                                timestamp_writes: None,
-                                occlusion_query_set: None,
-                            });
-
-                        let window_aspect = size.width as f32 / size.height as f32;
-                        let video_aspect = video_size.0 as f32 / video_size.1 as f32;
-
-                        let mut vp_w = size.width as f32;
-                        let mut vp_h = size.height as f32;
-                        let mut vp_x = 0.0;
-                        let mut vp_y = 0.0;
-
-                        if window_aspect > video_aspect {
-                            vp_w = vp_h * video_aspect;
-                            vp_x = (size.width as f32 - vp_w) / 2.0;
-                        } else {
-                            vp_h = vp_w / video_aspect;
-                            vp_y = (size.height as f32 - vp_h) / 2.0;
-                        }
-
-                        render_pass.set_viewport(vp_x, vp_y, vp_w, vp_h, 0.0, 1.0);
-                        render_pass.set_pipeline(&render_pipeline);
-                        render_pass.set_bind_group(0, bind_group, &[]);
-                        render_pass.draw(0..3, 0..1);
+            if should_render {
+                // Handle fullscreen request from UI
+                if overlay.fullscreen_requested {
+                    overlay.fullscreen_requested = false;
+                    let is_fullscreen = window.fullscreen().is_some();
+                    if is_fullscreen {
+                        window.set_fullscreen(None);
                     } else {
-                        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                            label: Some("Clear Pass"),
-                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                view: &view,
-                                resolve_target: None,
-                                ops: wgpu::Operations {
-                                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                                    store: wgpu::StoreOp::Store,
-                                },
-                            })],
-                            depth_stencil_attachment: None,
-                            timestamp_writes: None,
-                            occlusion_query_set: None,
-                        });
+                        window.set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
                     }
+                }
 
-                    let raw_input = egui_state.take_egui_input(&window);
-                    let full_output = egui_ctx.run(raw_input, |ctx| {
-                        overlay.render(ctx, video_size);
+                // Handle Stealth Mode request
+                if overlay.stealth_mode_requested {
+                    overlay.stealth_mode_requested = false;
+                    overlay.stealth_mode = !overlay.stealth_mode;
+
+                    if overlay.stealth_mode {
+                        // Win32 Ghost Mode + Fullscreen Strategy
+                        window.set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
+                        window.set_window_level(winit::window::WindowLevel::AlwaysOnBottom);
+
+                        #[cfg(target_os = "windows")]
+                        {
+                            use std::os::raw::{c_int, c_void};
+                            let hwnd = get_hwnd(&window);
+                            
+                            unsafe {
+                                #[link(name = "user32")]
+                                unsafe extern "system" {
+                                    fn GetWindowLongW(hwnd: *mut c_void, index: c_int) -> isize;
+                                    fn SetWindowLongW(hwnd: *mut c_void, index: c_int, new_long: isize) -> isize;
+                                    fn SetLayeredWindowAttributes(hwnd: *mut c_void, key: u32, alpha: u8, flags: u32) -> i32;
+                                }
+                                const GWL_EXSTYLE: c_int = -20;
+                                const WS_EX_LAYERED: isize = 0x00080000;
+                                const WS_EX_TRANSPARENT: isize = 0x00000020;
+                                const LWA_ALPHA: u32 = 0x2;
+
+                                let mut style = GetWindowLongW(hwnd, GWL_EXSTYLE);
+                                style |= WS_EX_LAYERED | WS_EX_TRANSPARENT;
+                                SetWindowLongW(hwnd, GWL_EXSTYLE, style);
+                                SetLayeredWindowAttributes(hwnd, 0, 1, LWA_ALPHA); 
+                            }
+                        }
+                    } else {
+                        // Restore: Exit Fullscreen and remove Ghost attributes
+                        window.set_fullscreen(None);
+                        window.set_window_level(winit::window::WindowLevel::Normal);
+                        window.set_outer_position(winit::dpi::PhysicalPosition::new(100, 100));
+                        let _ = window.request_inner_size(winit::dpi::PhysicalSize::new(1280, 720));
+
+                        #[cfg(target_os = "windows")]
+                        {
+                            use std::os::raw::{c_int, c_void};
+                            let hwnd = get_hwnd(&window);
+                            
+                            unsafe {
+                                #[link(name = "user32")]
+                                unsafe extern "system" {
+                                    fn GetWindowLongW(hwnd: *mut c_void, index: c_int) -> isize;
+                                    fn SetWindowLongW(hwnd: *mut c_void, index: c_int, new_long: isize) -> isize;
+                                }
+                                const GWL_EXSTYLE: c_int = -20;
+                                const WS_EX_LAYERED: isize = 0x00080000;
+                                const WS_EX_TRANSPARENT: isize = 0x00000020;
+
+                                let mut style = GetWindowLongW(hwnd, GWL_EXSTYLE);
+                                style &= !(WS_EX_LAYERED | WS_EX_TRANSPARENT);
+                                SetWindowLongW(hwnd, GWL_EXSTYLE, style);
+                            }
+                        }
+                        window.focus_window();
+                    }
+                }
+
+                // Handle Device Switch request
+                if overlay.device_switch_requested {
+                    overlay.device_switch_requested = false;
+
+                    let v_id = overlay.selected_video_idx.and_then(|idx| {
+                        video_infos_local.get(idx).map(|d| d.internal_id.clone())
                     });
 
-                    egui_state.handle_platform_output(&window, full_output.platform_output);
+                    // Detect if Video changed to trigger Auto-Match
+                    let mut a_id = overlay.selected_audio_idx.and_then(|idx| {
+                        audio_infos_local.get(idx).map(|d| d.internal_id.clone())
+                    });
 
-                    let clipped_primitives =
-                        egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
-                    for (id, image_delta) in &full_output.textures_delta.set {
-                        egui_renderer.update_texture(&device, &queue, *id, image_delta);
+                    if last_v_idx != overlay.selected_video_idx {
+                        // Video changed! Trigger Auto-Match
+                        if let Some(ref v_name) = v_id {
+                            if let Some(matched_id) = Self::match_audio_for_video(
+                                v_name,
+                                &audio_infos_local,
+                                self.log_sender.clone(),
+                            ) {
+                                // Update overlay to reflect matched audio
+                                overlay.selected_audio_idx = audio_infos_local
+                                    .iter()
+                                    .position(|d| d.internal_id == matched_id);
+                                a_id = Some(matched_id);
+                            } else {
+                                overlay.selected_audio_idx = None;
+                                a_id = None;
+                            }
+                        }
+                        last_v_idx = overlay.selected_video_idx;
                     }
 
-                    let screen_descriptor = egui_wgpu::ScreenDescriptor {
-                        size_in_pixels: [config.width, config.height],
-                        pixels_per_point: window.scale_factor() as f32,
+                    // Sync caps list when video device changes
+                    if let Some(idx) = overlay.selected_video_idx {
+                        let new_caps = video_infos_local[idx].caps.clone();
+                        if overlay.supported_caps != new_caps {
+                            overlay.supported_caps = new_caps;
+                            overlay.selected_cap_idx = None; // Reset to Auto
+                        }
+                    }
+
+                    // Parse selected resolution and FPS
+                    let mut res = None;
+                    let mut fps = None;
+                    if let Some(cap_idx) = overlay.selected_cap_idx {
+                        if let Some(cap_str) = overlay.supported_caps.get(cap_idx) {
+                            // Format: "1920x1080 @ 60fps"
+                            let parts: Vec<&str> = cap_str.split(" @ ").collect();
+                            if parts.len() == 2 {
+                                let dims: Vec<&str> = parts[0].split('x').collect();
+                                if dims.len() == 2 {
+                                    if let (Ok(w), Ok(h)) =
+                                        (dims[0].parse::<i32>(), dims[1].parse::<i32>())
+                                    {
+                                        res = Some((w, h));
+                                    }
+                                }
+                                let fps_val =
+                                    parts[1].replace("fps", "").parse::<i32>().unwrap_or(0);
+                                fps = Some(fps_val);
+                            }
+                        }
+                    }
+
+                    println!(
+                        "Switching to Video: {:?}, Audio: {:?}, Res: {:?}, FPS: {:?}",
+                        v_id, a_id, res, fps
+                    );
+
+                    let fmt_str = match overlay.selected_format_idx {
+                        1 => Some("MJPG"),
+                        2 => Some("YUY2"),
+                        3 => Some("NV12"),
+                        _ => None,
                     };
 
-                    egui_renderer.update_buffers(
-                        &device,
-                        &queue,
-                        &mut encoder,
+                    match PipelineController::new(
+                        v_id,
+                        a_id,
+                        res,
+                        fps,
+                        fmt_str,
+                        self.log_sender.clone(),
+                    ) {
+                        Ok(new_pipeline) => {
+                            current_pipeline = new_pipeline;
+                            receiver = current_pipeline.receiver();
+                            overlay.add_log("Pipeline successfully restarted with new settings.");
+                        }
+                        Err(e) => {
+                            overlay.add_log(format!("Failed to switch settings: {}", e));
+                        }
+                    }
+                }
+
+                // Update Volume
+                let current_vol = if overlay.is_muted { 0.0 } else { overlay.volume as f64 };
+                current_pipeline.update_adjustments(
+                    overlay.brightness,
+                    overlay.contrast,
+                    overlay.saturation,
+                    overlay.hue,
+                    current_vol as f32,
+                    overlay.is_muted,
+                );
+
+                // Drain logs from channel to UI
+                while let Ok(log_msg) = self.log_receiver.try_recv() {
+                    overlay.add_log(log_msg);
+                }
+
+                // Get the latest frame, discarding older ones in the channel
+                let mut latest_frame = None;
+                while let Ok(frame) = receiver.try_recv() {
+                    latest_frame = Some(frame);
+                    frame_counter += 1; // Count real received frames
+                }
+
+                // Update FPS in overlay
+                if overlay.update_fps(frame_counter) {
+                    frame_counter = 0;
+                }
+
+                if let Some(frame) = latest_frame {
+                    let texture_size = wgpu::Extent3d {
+                        width: frame.width,
+                        height: frame.height,
+                        depth_or_array_layers: 1,
+                    };
+
+                    video_size = (frame.width, frame.height);
+
+                    let needs_recreate = video_texture
+                        .as_ref()
+                        .map_or(true, |t| t.width() != frame.width || t.height() != frame.height);
+
+                    if needs_recreate {
+                        let texture = device.create_texture(&wgpu::TextureDescriptor {
+                            size: texture_size,
+                            mip_level_count: 1,
+                            sample_count: 1,
+                            dimension: wgpu::TextureDimension::D2,
+                            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                                | wgpu::TextureUsages::COPY_DST,
+                            label: Some("video_texture"),
+                            view_formats: &[],
+                        });
+
+                        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                            layout: &bind_group_layout,
+                            entries: &[
+                                wgpu::BindGroupEntry {
+                                    binding: 0,
+                                    resource: wgpu::BindingResource::TextureView(&view),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 1,
+                                    resource: wgpu::BindingResource::Sampler(&sampler),
+                                },
+                            ],
+                            label: Some("video_bind_group"),
+                        });
+
+                        video_texture = Some(texture);
+                        video_bind_group = Some(bind_group);
+                    }
+
+                    if let Some(texture) = &video_texture {
+                        queue.write_texture(
+                            wgpu::ImageCopyTexture {
+                                texture,
+                                mip_level: 0,
+                                origin: wgpu::Origin3d::ZERO,
+                                aspect: wgpu::TextureAspect::All,
+                            },
+                            &frame.data,
+                            wgpu::ImageDataLayout {
+                                offset: 0,
+                                bytes_per_row: Some(4 * frame.width),
+                                rows_per_image: Some(frame.height),
+                            },
+                            texture_size,
+                        );
+                    }
+                }
+
+                let output = match surface.get_current_texture() {
+                    Ok(texture) => texture,
+                    Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {
+                        surface.configure(&device, &config);
+                        return;
+                    }
+                    Err(e) => {
+                        log::error!("Surface error: {:?}", e);
+                        return;
+                    }
+                };
+
+                let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+                let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Render Encoder"),
+                });
+
+                if let Some(bind_group) = &video_bind_group {
+                    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("Video Render Pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &view,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
+
+                    let window_aspect = size.width as f32 / size.height as f32;
+                    let video_aspect = video_size.0 as f32 / video_size.1 as f32;
+
+                    let mut vp_w = size.width as f32;
+                    let mut vp_h = size.height as f32;
+                    let mut vp_x = 0.0;
+                    let mut vp_y = 0.0;
+
+                    if window_aspect > video_aspect {
+                        vp_w = vp_h * video_aspect;
+                        vp_x = (size.width as f32 - vp_w) / 2.0;
+                    } else {
+                        vp_h = vp_w / video_aspect;
+                        vp_y = (size.height as f32 - vp_h) / 2.0;
+                    }
+
+                    render_pass.set_viewport(vp_x, vp_y, vp_w, vp_h, 0.0, 1.0);
+                    render_pass.set_pipeline(&render_pipeline);
+                    render_pass.set_bind_group(0, bind_group, &[]);
+                    render_pass.draw(0..3, 0..1);
+                } else {
+                    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("Clear Pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &view,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
+                }
+
+                let raw_input = egui_state.take_egui_input(&window);
+                let full_output = egui_ctx.run(raw_input, |ctx| {
+                    overlay.render(ctx, video_size);
+                });
+
+                egui_state.handle_platform_output(&window, full_output.platform_output);
+
+                let clipped_primitives =
+                    egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
+                for (id, image_delta) in &full_output.textures_delta.set {
+                    egui_renderer.update_texture(&device, &queue, *id, image_delta);
+                }
+
+                let screen_descriptor = egui_wgpu::ScreenDescriptor {
+                    size_in_pixels: [config.width, config.height],
+                    pixels_per_point: window.scale_factor() as f32,
+                };
+
+                egui_renderer.update_buffers(
+                    &device,
+                    &queue,
+                    &mut encoder,
+                    &clipped_primitives,
+                    &screen_descriptor,
+                );
+
+                {
+                    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("egui render pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &view,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Load,
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
+
+                    egui_renderer.render(
+                        &mut render_pass,
                         &clipped_primitives,
                         &screen_descriptor,
                     );
-
-                    {
-                        let mut render_pass =
-                            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                label: Some("egui render pass"),
-                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                    view: &view,
-                                    resolve_target: None,
-                                    ops: wgpu::Operations {
-                                        load: wgpu::LoadOp::Load,
-                                        store: wgpu::StoreOp::Store,
-                                    },
-                                })],
-                                depth_stencil_attachment: None,
-                                timestamp_writes: None,
-                                occlusion_query_set: None,
-                            });
-
-                        egui_renderer.render(
-                            &mut render_pass,
-                            &clipped_primitives,
-                            &screen_descriptor,
-                        );
-                    }
-
-                    for id in &full_output.textures_delta.free {
-                        egui_renderer.free_texture(id);
-                    }
-
-                    queue.submit(std::iter::once(encoder.finish()));
-                    output.present();
                 }
-                Event::AboutToWait => {
-                    window.request_redraw();
+
+                for id in &full_output.textures_delta.free {
+                    egui_renderer.free_texture(id);
                 }
-                _ => {}
+
+                queue.submit(std::iter::once(encoder.finish()));
+                output.present();
             }
         })?;
         Ok(())

@@ -2,7 +2,7 @@
 
 [Setup]
 AppName=Kaptura
-AppVersion=1.0
+AppVersion=1.1.0
 AppPublisher=Eser Şahiner
 AppPublisherURL=https://github.com/esershnr/kaptura
 AppSupportURL=https://github.com/esershnr/kaptura
@@ -13,7 +13,7 @@ UninstallDisplayIcon={app}\kaptura.exe
 Compression=lzma2
 SolidCompression=yes
 OutputDir=Output
-OutputBaseFilename=Kaptura_Setup_v1.0
+OutputBaseFilename=Kaptura_Setup_v1.1.0
 SetupIconFile=assets\icon.ico
 
 [Tasks]
