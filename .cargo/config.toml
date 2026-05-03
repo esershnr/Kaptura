@@ -1,0 +1,7 @@
+[env]
+PKG_CONFIG = "C:\\Program Files\\gstreamer\\1.0\\msvc_x86_64\\bin\\pkg-config.exe"
+PKG_CONFIG_PATH = "C:\\Program Files\\gstreamer\\1.0\\msvc_x86_64\\lib\\pkgconfig"
+PYTHON = "python3"
+
+[target.x86_64-pc-windows-msvc]
+runner = "cmd /c cargo-runner.bat"

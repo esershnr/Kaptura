@@ -1,0 +1,17 @@
+# Rust Standart
+/target
+Cargo.lock
+
+# Kaptura Özel Çıktılar (Repo'yu şişirmemesi için)
+/dist
+/Output
+
+# IDE ve Sistem Dosyaları
+.vscode/
+.idea/
+*.rs.bk
+.DS_Store
+Thumbs.db
+
+# Geçici Loglar
+*.log

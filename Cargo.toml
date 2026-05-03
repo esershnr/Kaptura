@@ -1,0 +1,25 @@
+[package]
+name = "kaptura"
+version = "0.1.0"
+edition = "2024"
+
+[build-dependencies]
+winres = "0.1"
+
+[dependencies]
+anyhow = "1.0.102"
+bytemuck = { version = "1.25.0", features = ["derive"] }
+crossbeam-channel = "0.5.15"
+egui = "0.28.1"
+egui-wgpu = "0.28.1"
+egui-winit = "0.28.1"
+env_logger = "0.11.10"
+image = "0.25.5"
+glib = "0.22.7"
+gstreamer = "0.25.1"
+gstreamer-app = "0.25.0"
+gstreamer-video = "0.25.0"
+log = "0.4.29"
+pollster = "0.4.0"
+wgpu = "0.20.1"
+winit = "0.29.15"
