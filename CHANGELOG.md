@@ -2,6 +2,21 @@
  
 All notable changes to this project will be documented in this file.
  
+## [1.2.0] - 2026-05-12
+ 
+### Added
+- **GPU-Accelerated Sharpening**: Implemented a 3x3 Laplacian sharpening filter directly in the WGSL fragment shader, allowing for real-time detail recovery without CPU cost.
+- **Interactive Control Panel**: Upgraded value displays to interactive `DragValue` inputs, supporting both fine-tuned dragging and manual keyboard entry for all image adjustments.
+- **Improved UI Layout**: Unified the technical and creative controls into an optimized dual-panel layout, resolving overflow issues on small resolutions.
+- **Action Grid**: Reorganized mode toggles (Stealth, Logs, Audio Only) into a high-visibility grid with improved color contrast for better accessibility.
+
+### Optimized
+- **Minimal Latency Pipeline**: Reduced crossbeam channel capacity to `bounded(1)` and set `desired_maximum_frame_latency` to `1` in the wgpu swapchain, ensuring the fastest possible visual response.
+- **Shader Uniform Management**: Implemented efficient per-frame uniform buffer updates for dynamic post-processing.
+
+---
+
+ 
 ## [1.1.0] - 2026-05-04
  
 ### Added

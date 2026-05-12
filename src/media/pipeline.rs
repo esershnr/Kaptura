@@ -142,8 +142,8 @@ impl PipelineController {
             .downcast::<AppSink>()
             .map_err(|_| anyhow::anyhow!("Expected an AppSink"))?;
 
-        // Bounded channel: prevents unbounded memory growth when render is slower than capture
-        let (sender, receiver) = bounded(2);
+        // Bounded channel: 1 ensures we only keep the absolute freshest frame
+        let (sender, receiver) = bounded(1);
 
         appsink.set_callbacks(
             gstreamer_app::AppSinkCallbacks::builder()

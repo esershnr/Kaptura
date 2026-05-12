@@ -1,8 +1,10 @@
 ; Kaptura Profesyonel Kurulum Scripti (Inno Setup)
 
 [Setup]
+; AppId değeri her sürümde sabit kalmalıdır (Update yönetimi için)
+AppId={{C6D2A8B1-F3E4-4A8E-B9D1-F2E3A4B5C6D7}
 AppName=Kaptura
-AppVersion=1.1.0
+AppVersion=1.2.0
 AppPublisher=Eser Şahiner
 AppPublisherURL=https://github.com/esershnr/kaptura
 AppSupportURL=https://github.com/esershnr/kaptura
@@ -15,6 +17,8 @@ SolidCompression=yes
 OutputDir=Output
 OutputBaseFilename=Kaptura_Setup_v1.1.0
 SetupIconFile=assets\icon.ico
+ArchitecturesAllowed=x64
+ArchitecturesInstallIn64BitMode=x64
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked

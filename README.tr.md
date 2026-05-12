@@ -1,4 +1,4 @@
-# 🚀 Kaptura 1.1.0 - Video Yakalama Yazılımı
+# 🚀 Kaptura 1.2.0 - Video Yakalama Yazılımı
 
 Kaptura, Windows sistemler için geliştirilmiş, yüksek performanslı ve düşük gecikmeli bir **UVC (USB Video Class)** yakalama arayüzüdür. Oyun yakalama kartları ve profesyonel web kameralar için optimize edilmiş, minimalist ama güçlü bir araçtır.
 
@@ -11,7 +11,7 @@ Kaptura, Windows sistemler için geliştirilmiş, yüksek performanslı ve düş
 ### 🛡️ Parazit ve Glitch Önleme
 Birçok yakalama kartı, USB bant genişliği veya saat senkronizasyonu sorunları nedeniyle seste "çatırdama" veya "parazit" yapabilir. Kaptura, bunu özel bir **100ms Leaky Downstream Buffer** mimarisi kullanarak çözer. Bu sistem, gecikmeyi minimumda tutarken eskiyen paketleri atar ve sesin her zaman pürüzsüz kalmasını sağlar.
 
-### 👤 Stealth Mode (v1.1.0 - Win32 Hayalet Modu)
+### 👤 Stealth Mode (v1.2.0 - Win32 Hayalet Modu)
 Özellikle **Discord üzerinden yayın açanlar** için geliştirilen Stealth Mode, artık düşük seviyeli Win32 API çağrılarıyla en üst seviye gizlilik sunar:
 - **Görünmez ve Tıklama Geçirgen**: Pencere yayın için aktif kalır ancak senin için tamamen şeffaf ve tıklanabilir (click-through) hale gelir.
 - **Tam Ekran (Borderless)**: Yayın kalitesini artırmak için ekranı otomatik olarak kaplar.
@@ -35,6 +35,11 @@ Kaptura, görüntü kalitesi ve sistem kararlılığı arasındaki dengeyi kurab
 | `SHIFT + F10` | **Arayüzü Gizle/Göster** | Genel (Her Zaman) |
 | `Çift Tıklama` | **Arayüzü Gizle/Göster** | Yerel (Sadece Normal) |
 | `ESC` | **Uygulamayı Kapat** | Yerel (Sadece Normal) |
+
+### 🧩 v1.2.0 ile Gelen Yeni Özellikler
+- **GPU Hızlandırmalı Keskinleştirme**: CPU'ya yük bindirmeden düşük segment yakalama kartlarından maksimum detay elde edin.
+- **İnteraktif Kontroller**: Değerleri artık klavye ile manuel girebilir veya sürükleyerek milimetrik ayar yapabilirsiniz.
+- **Optimize Edilmiş Gecikme**: Daha hızlı yanıt süresi için buffer yönetimi iyileştirildi.
 
 ---
 

@@ -2,11 +2,21 @@ use crossbeam_channel::{Receiver, Sender};
 use std::sync::Arc;
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::event::{Event, WindowEvent};
-use winit::event_loop::{ControlFlow, EventLoop};
+use winit::event_loop::EventLoop;
 use winit::window::WindowBuilder;
+use bytemuck::{Pod, Zeroable};
 
 use crate::media::pipeline::{DeviceInfo, PipelineController};
 use crate::ui::overlay::Overlay;
+
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+struct ShaderUniforms {
+    sharpen_amount: f32,
+    _pad: f32,
+    tex_width: f32,
+    tex_height: f32,
+}
  
 #[cfg(target_os = "windows")]
 fn get_hwnd(window: &winit::window::Window) -> *mut std::os::raw::c_void {
@@ -120,7 +130,8 @@ impl App {
     }
 
     fn load_icon() -> Option<winit::window::Icon> {
-        match image::open("assets/icon.ico") {
+        let icon_data = include_bytes!("../../assets/icon.ico");
+        match image::load_from_memory(icon_data) {
             Ok(img) => {
                 let img = img.to_rgba8();
                 let (width, height) = img.dimensions();
@@ -136,16 +147,15 @@ impl App {
         let icon = Self::load_icon();
         let window = Arc::new(
             WindowBuilder::new()
-                .with_title("Kaptura v1.1.0 - Video Capture Utility")
+                .with_title("Kaptura v1.2.0 - Video Capture Utility")
                 .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 720.0))
                 .with_window_icon(icon)
-                .with_transparent(true)
                 .build(&event_loop)
                 .unwrap(),
         );
 
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
+            backends: wgpu::Backends::PRIMARY,
             ..Default::default()
         });
 
@@ -185,9 +195,16 @@ impl App {
             present_mode: wgpu::PresentMode::AutoNoVsync,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
-            desired_maximum_frame_latency: 2,
+            desired_maximum_frame_latency: 1,
         };
         surface.configure(&device, &config);
+
+        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Uniform Buffer"),
+            size: std::mem::size_of::<ShaderUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
 
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             entries: &[
@@ -205,6 +222,16 @@ impl App {
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
                     count: None,
                 },
             ],
@@ -314,7 +341,7 @@ impl App {
         let mut last_v_idx: Option<usize> = None; // Tracks last selected video device (replaces unsafe static mut)
 
         event_loop.run(move |event, elwt| {
-            elwt.set_control_flow(ControlFlow::Poll);
+            elwt.set_control_flow(winit::event_loop::ControlFlow::Poll);
 
             if let Event::WindowEvent {
                 event: ref window_event,
@@ -411,6 +438,15 @@ impl App {
                     }
                     window.focus_window();
                 }
+
+                // 3. Normal Fullscreen Exit (Works only in Normal Mode)
+                if !overlay.stealth_mode && !shift_pressed && esc_pressed && !ESC_WAS_DOWN {
+                    if window.fullscreen().is_some() {
+                        window.set_fullscreen(None);
+                        overlay.fullscreen_requested = false;
+                    }
+                }
+
                 ESC_WAS_DOWN = esc_pressed;
             }
         }
@@ -698,6 +734,10 @@ impl App {
                                     binding: 1,
                                     resource: wgpu::BindingResource::Sampler(&sampler),
                                 },
+                                wgpu::BindGroupEntry {
+                                    binding: 2,
+                                    resource: uniform_buffer.as_entire_binding(),
+                                },
                             ],
                             label: Some("video_bind_group"),
                         });
@@ -705,6 +745,15 @@ impl App {
                         video_texture = Some(texture);
                         video_bind_group = Some(bind_group);
                     }
+
+                    // Update uniforms
+                    let uniforms = ShaderUniforms {
+                        sharpen_amount: if overlay.use_sharpen { overlay.sharpening_amount } else { 0.0 },
+                        _pad: 0.0,
+                        tex_width: frame.width as f32,
+                        tex_height: frame.height as f32,
+                    };
+                    queue.write_buffer(&uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
                     if let Some(texture) = &video_texture {
                         queue.write_texture(
@@ -742,50 +791,69 @@ impl App {
                     label: Some("Render Encoder"),
                 });
 
-                if let Some(bind_group) = &video_bind_group {
-                    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("Video Render Pass"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &view,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                                store: wgpu::StoreOp::Store,
-                            },
-                        })],
-                        depth_stencil_attachment: None,
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
-                    });
+                if !overlay.audio_only {
+                    if let Some(bind_group) = &video_bind_group {
+                        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("Video Render Pass"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: &view,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            depth_stencil_attachment: None,
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                        });
 
-                    let window_aspect = size.width as f32 / size.height as f32;
-                    let video_aspect = video_size.0 as f32 / video_size.1 as f32;
+                        let window_aspect = size.width as f32 / size.height as f32;
+                        let video_aspect = video_size.0 as f32 / video_size.1 as f32;
 
-                    let mut vp_w = size.width as f32;
-                    let mut vp_h = size.height as f32;
-                    let mut vp_x = 0.0;
-                    let mut vp_y = 0.0;
+                        let mut vp_w = size.width as f32;
+                        let mut vp_h = size.height as f32;
+                        let mut vp_x = 0.0;
+                        let mut vp_y = 0.0;
 
-                    if window_aspect > video_aspect {
-                        vp_w = vp_h * video_aspect;
-                        vp_x = (size.width as f32 - vp_w) / 2.0;
+                        if window_aspect > video_aspect {
+                            vp_w = vp_h * video_aspect;
+                            vp_x = (size.width as f32 - vp_w) / 2.0;
+                        } else {
+                            vp_h = vp_w / video_aspect;
+                            vp_y = (size.height as f32 - vp_h) / 2.0;
+                        }
+
+                        render_pass.set_viewport(vp_x, vp_y, vp_w, vp_h, 0.0, 1.0);
+                        render_pass.set_pipeline(&render_pipeline);
+                        render_pass.set_bind_group(0, bind_group, &[]);
+                        render_pass.draw(0..4, 0..1);
                     } else {
-                        vp_h = vp_w / video_aspect;
-                        vp_y = (size.height as f32 - vp_h) / 2.0;
+                        // Clear Pass if no video yet
+                        let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("Clear Pass"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: &view,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            depth_stencil_attachment: None,
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                        });
                     }
-
-                    render_pass.set_viewport(vp_x, vp_y, vp_w, vp_h, 0.0, 1.0);
-                    render_pass.set_pipeline(&render_pipeline);
-                    render_pass.set_bind_group(0, bind_group, &[]);
-                    render_pass.draw(0..3, 0..1);
                 } else {
-                    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("Clear Pass"),
+                    // Audio-Only Mode: Just clear the screen to save GPU cycles
+                    let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("Audio Only Clear Pass"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                             view: &view,
                             resolve_target: None,
                             ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.05, g: 0.05, b: 0.06, a: 1.0 }),
                                 store: wgpu::StoreOp::Store,
                             },
                         })],

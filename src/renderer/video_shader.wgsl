@@ -21,7 +21,44 @@ var t_diffuse: texture_2d<f32>;
 @group(0) @binding(1)
 var s_diffuse: sampler;
 
+struct Uniforms {
+    sharpen_amount: f32,
+    _pad: f32,
+    tex_width: f32,
+    tex_height: f32,
+};
+
+@group(0) @binding(2)
+var<uniform> uniforms: Uniforms;
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return textureSample(t_diffuse, s_diffuse, in.tex_coords);
+    let base_color = textureSample(t_diffuse, s_diffuse, in.tex_coords);
+    
+    if (uniforms.sharpen_amount <= 0.0) {
+        return base_color;
+    }
+
+    // Offset for 1 pixel
+    let dx = 1.0 / uniforms.tex_width;
+    let dy = 1.0 / uniforms.tex_height;
+
+    // Simple 3x3 sharpening kernel (Laplacian)
+    // [ 0 -1  0 ]
+    // [-1  5 -1 ]
+    // [ 0 -1  0 ]
+    // Weight = 5 for center, -1 for neighbors
+    
+    let c = base_color;
+    let u = textureSample(t_diffuse, s_diffuse, in.tex_coords + vec2<f32>(0.0, -dy));
+    let d = textureSample(t_diffuse, s_diffuse, in.tex_coords + vec2<f32>(0.0, dy));
+    let l = textureSample(t_diffuse, s_diffuse, in.tex_coords + vec2<f32>(-dx, 0.0));
+    let r = textureSample(t_diffuse, s_diffuse, in.tex_coords + vec2<f32>(dx, 0.0));
+
+    let sharpened = c * 5.0 - (u + d + l + r);
+    
+    // Mix original and sharpened based on amount
+    let final_color = mix(base_color, sharpened, uniforms.sharpen_amount);
+    
+    return vec4<f32>(final_color.rgb, base_color.a);
 }

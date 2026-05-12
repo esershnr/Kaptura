@@ -1,4 +1,4 @@
-# 🚀 Kaptura 1.1.0 - Video Capture Utility
+# 🚀 Kaptura 1.2.0 - Video Capture Utility
 
 Kaptura is a high-performance, low-latency **UVC (USB Video Class)** capture interface designed for Windows. It is optimized for gaming capture cards and professional webcams, providing a minimalist yet powerful tool for creators.
 
@@ -15,7 +15,7 @@ Kaptura is a high-performance, low-latency **UVC (USB Video Class)** capture int
 ### 🛡️ Parasite & Glitch Prevention
 Many capture cards experience audio "crackling" or "parasites" due to USB bandwidth or clock sync issues. Kaptura solves this using a custom **100ms Leaky Downstream Buffer** architecture. This ensures audio stays fresh and smooth by dropping stale packets while maintaining minimal latency.
 
-### 👤 Stealth Mode (v1.1.0 - Win32 Ghost Mode)
+### 👤 Stealth Mode (v1.2.0 - Win32 Ghost Mode)
 Designed for **Discord streaming**, Stealth Mode now utilizes low-level Win32 API calls for the ultimate capture experience:
 - **Invisible & Click-through**: The window remains active for capture but is invisible and ignores mouse clicks for the user.
 - **Borderless Fullscreen**: Automatically covers the entire screen to provide high-quality, bar-free streams.
@@ -39,6 +39,11 @@ Kaptura provides explicit control over the hardware's pixel output to help you b
 | `SHIFT + F10` | **Toggle UI Visibility** | Global (Always) |
 | `Double-Click` | **Toggle UI Visibility** | Local (Normal only) |
 | `ESC` | **Close Application** | Local (Normal only) |
+
+### 🧩 New Features in v1.2.0
+- **GPU-Accelerated Sharpening**: Recover details from low-end capture cards with zero CPU overhead.
+- **Interactive Controls**: Values can now be manually typed or dragged for extreme precision.
+- **Optimized Latency**: Reduced buffer overhead for faster response.
 
 ---
 

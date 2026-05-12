@@ -8,12 +8,15 @@ pub struct Overlay {
     pub fullscreen_requested: bool,
     pub stealth_mode: bool,
     pub stealth_mode_requested: bool,
+    pub audio_only: bool,
     pub volume: f32,
     pub brightness: f32,
     pub contrast: f32,
     pub saturation: f32,
     pub hue: f32,
     pub is_muted: bool,
+    pub sharpening_amount: f32,
+    pub use_sharpen: bool,
     pub video_devices: Vec<String>,
     pub audio_devices: Vec<String>,
     pub supported_caps: Vec<String>,
@@ -35,12 +38,15 @@ impl Overlay {
             fullscreen_requested: false,
             stealth_mode: false,
             stealth_mode_requested: false,
+            audio_only: false,
             volume: 1.0,
             brightness: 0.0,
             contrast: 1.0,
             saturation: 1.0,
             hue: 0.0,
             is_muted: false,
+            sharpening_amount: 0.0,
+            use_sharpen: false,
             video_devices: Vec::new(),
             audio_devices: Vec::new(),
             supported_caps: Vec::new(),
@@ -73,19 +79,24 @@ impl Overlay {
         }
     }
 
-    pub fn render(&mut self, ctx: &egui::Context, video_size: (u32, u32)) {
+    pub fn render(&mut self, ctx: &egui::Context, _video_size: (u32, u32)) {
         if !self.show_ui {
             return;
         }
 
-        // Apply a dark theme with glassmorphism touches
+        // Apply a modern dark theme with glassmorphism touches
         let mut visuals = egui::Visuals::dark();
-        visuals.window_fill = Color32::from_rgba_premultiplied(20, 20, 25, 220);
-        visuals.window_stroke = Stroke::new(1.0, Color32::from_rgba_premultiplied(100, 100, 110, 80));
-        visuals.window_rounding = Rounding::same(12.0);
-        ctx.set_visuals(visuals);
+        visuals.window_fill = Color32::from_rgba_premultiplied(15, 15, 20, 230); // Darker, sleeker glass
+        visuals.window_stroke = Stroke::new(1.0, Color32::from_rgba_premultiplied(80, 80, 90, 100));
+        visuals.window_rounding = Rounding::same(16.0); // Smoother corners
 
-        // Bento Box 1: Status Overlay
+        let mut style = egui::Style::default();
+        style.visuals = visuals;
+        style.spacing.item_spacing = Vec2::new(10.0, 10.0);
+        style.spacing.window_margin = egui::Margin::same(16.0);
+        ctx.set_style(style);
+
+        // Bento Box 1: Status Overlay (Top Left)
         egui::Window::new("Status")
             .title_bar(false)
             .resizable(false)
@@ -101,12 +112,15 @@ impl Overlay {
                         }
                     });
                 });
+                ui.label(RichText::new("v1.2.0 - Video Capture").color(Color32::GRAY).size(10.0));
+                
+                ui.add_space(12.0);
 
                 // Video Device Selection
                 ui.label(RichText::new("VIDEO SOURCE").color(Color32::GRAY).size(10.0));
                 let prev_v = self.selected_video_idx;
                 egui::ComboBox::from_id_source("v_dev")
-                    .width(180.0)
+                    .width(220.0)
                     .selected_text(self.selected_video_idx.and_then(|idx| self.video_devices.get(idx)).unwrap_or(&"Select Device".to_string()))
                     .show_ui(ui, |ui| {
                         for (i, dev) in self.video_devices.iter().enumerate() {
@@ -121,7 +135,7 @@ impl Overlay {
                 ui.label(RichText::new("AUDIO SOURCE").color(Color32::GRAY).size(10.0));
                 let prev_a = self.selected_audio_idx;
                 egui::ComboBox::from_id_source("a_dev")
-                    .width(180.0)
+                    .width(220.0)
                     .selected_text(self.selected_audio_idx.and_then(|idx| self.audio_devices.get(idx)).unwrap_or(&"No Audio Output".to_string()))
                     .show_ui(ui, |ui| {
                         ui.selectable_value(&mut self.selected_audio_idx, None, "None");
@@ -133,11 +147,11 @@ impl Overlay {
 
                 ui.add_space(8.0);
 
-                // Resolution / FPS Selection
+                // NEW: Restore Resolution / FPS Selection
                 ui.label(RichText::new("RESOLUTION / FPS").color(Color32::GRAY).size(10.0));
                 let prev_c = self.selected_cap_idx;
                 egui::ComboBox::from_id_source("cap_dev")
-                    .width(180.0)
+                    .width(220.0)
                     .selected_text(self.selected_cap_idx.and_then(|idx| self.supported_caps.get(idx)).unwrap_or(&"Auto".to_string()))
                     .show_ui(ui, |ui| {
                         ui.selectable_value(&mut self.selected_cap_idx, None, "Auto");
@@ -149,37 +163,29 @@ impl Overlay {
 
                 ui.add_space(8.0);
 
-                // Pixel Format Selection
-                ui.label(RichText::new("PIXEL FORMAT").color(Color32::GRAY).size(10.0));
-                let prev_f = self.selected_format_idx;
-                egui::ComboBox::from_id_source("fmt_dev")
-                    .width(180.0)
-                    .selected_text(match self.selected_format_idx {
-                        1 => "MJPG",
-                        2 => "YUY2",
-                        3 => "NV12",
-                        _ => "Auto",
-                    })
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.selected_format_idx, 0, "Auto");
-                        ui.selectable_value(&mut self.selected_format_idx, 1, "MJPG");
-                        ui.selectable_value(&mut self.selected_format_idx, 2, "YUY2");
-                        ui.selectable_value(&mut self.selected_format_idx, 3, "NV12");
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new("PIXEL FORMAT").color(Color32::GRAY).size(10.0));
+                        let prev_f = self.selected_format_idx;
+                        egui::ComboBox::from_id_source("fmt_dev")
+                            .width(100.0)
+                            .selected_text(match self.selected_format_idx {
+                                1 => "MJPG", 2 => "YUY2", 3 => "NV12", _ => "Auto",
+                            })
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut self.selected_format_idx, 0, "Auto");
+                                ui.selectable_value(&mut self.selected_format_idx, 1, "MJPG");
+                                ui.selectable_value(&mut self.selected_format_idx, 2, "YUY2");
+                                ui.selectable_value(&mut self.selected_format_idx, 3, "NV12");
+                            });
+                        if prev_f != self.selected_format_idx { self.device_switch_requested = true; }
                     });
-                if prev_f != self.selected_format_idx { self.device_switch_requested = true; }
 
-                ui.add_space(12.0);
-                
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("RESOLUTION").color(Color32::GRAY).size(10.0));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(RichText::new(format!("{}x{}", video_size.0, video_size.1)).strong().color(Color32::WHITE));
-                    });
-                });
-                
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("CAPTURE FPS").color(Color32::GRAY).size(10.0));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.add_space(12.0);
+
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new("CURRENT FPS").color(Color32::GRAY).size(10.0));
+                        ui.add_space(4.0);
                         ui.label(RichText::new(format!("{:.1}", self.fps)).strong().color(Color32::from_rgb(100, 255, 100)));
                     });
                 });
@@ -187,18 +193,18 @@ impl Overlay {
                 ui.add_space(8.0);
             });
 
-        // Bento Box 2: Controls Overlay
-        egui::Window::new("Controls")
+        // Bento Box 2: Adjustments & Modes (Bottom Right)
+        egui::Window::new("Adjustments")
             .title_bar(false)
             .resizable(false)
             .collapsible(false)
             .anchor(egui::Align2::RIGHT_BOTTOM, Vec2::new(-20.0, -20.0))
             .show(ctx, |ui| {
                 ui.add_space(8.0);
-                ui.heading(RichText::new("AUDIO").strong().color(Color32::WHITE).size(14.0));
-                ui.add_space(8.0);
+                
+                // Volume
                 ui.horizontal(|ui| {
-                    ui.set_min_width(200.0);
+                    ui.set_min_width(280.0);
                     let icon = if self.is_muted || self.volume == 0.0 { "🔇" } else if self.volume < 0.5 { "🔉" } else { "🔊" };
                     if ui.button(RichText::new(icon).size(16.0)).clicked() {
                         self.is_muted = !self.is_muted;
@@ -209,40 +215,52 @@ impl Overlay {
                     ui.label(RichText::new(format!("{:.0}%", self.volume * 100.0)).monospace().color(Color32::GRAY));
                 });
 
-                ui.add_space(16.0);
+                ui.add_space(12.0);
                 ui.separator();
                 ui.add_space(8.0);
 
-                ui.horizontal(|ui| {
-                    ui.heading(RichText::new("ADJUSTMENTS").strong().color(Color32::WHITE).size(14.0));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let text = if self.stealth_mode { "Stealth Active" } else { "Stealth Mode" };
-                        let color = if self.stealth_mode { Color32::from_rgb(255, 100, 100) } else { Color32::from_rgb(0, 200, 255) };
-                        
-                        if ui.button(RichText::new(text).color(color).strong()).clicked() {
-                            self.stealth_mode_requested = true;
-                        }
+                // --- ACTION GRID with Improved Contrast ---
+                ui.columns(3, |cols| {
+                    // Logs: Bright Gray vs Dark Gray
+                    let log_color = if self.show_logs { Color32::WHITE } else { Color32::from_rgb(160, 160, 170) };
+                    if cols[0].add_sized([cols[0].available_width(), 30.0], egui::Button::new(RichText::new("LOGS").size(11.0).strong().color(log_color))).clicked() {
+                        self.show_logs = !self.show_logs;
+                    }
 
-                        ui.add_space(8.0);
+                    // Audio Only: Neon Purple vs Muted Purple
+                    let audio_color = if self.audio_only { Color32::from_rgb(220, 180, 255) } else { Color32::from_rgb(140, 120, 160) };
+                    if cols[1].add_sized([cols[1].available_width(), 30.0], egui::Button::new(RichText::new("AUDIO").size(11.0).strong().color(audio_color))).clicked() {
+                        self.audio_only = !self.audio_only;
+                    }
 
-                        let log_btn_text = if self.show_logs { "Hide Logs" } else { "Show Logs" };
-                        if ui.button(RichText::new(log_btn_text).color(Color32::from_rgb(150, 150, 160))).clicked() {
-                            self.show_logs = !self.show_logs;
-                        }
-                    });
+                    // Stealth: Neon Cyan vs Muted Cyan
+                    let stealth_color = if self.stealth_mode { Color32::from_rgb(255, 120, 120) } else { Color32::from_rgb(100, 220, 255) };
+                    if cols[2].add_sized([cols[2].available_width(), 30.0], egui::Button::new(RichText::new("STEALTH").size(11.0).strong().color(stealth_color))).clicked() {
+                        self.stealth_mode_requested = true;
+                    }
                 });
+
                 ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(8.0);
 
                 let add_control = |ui: &mut egui::Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, default: f32| {
                     ui.horizontal(|ui| {
-                        ui.set_min_width(200.0);
+                        ui.set_min_width(280.0);
                         ui.label(RichText::new(label).color(Color32::LIGHT_GRAY).size(12.0));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.button("⟲").on_hover_text("Reset").clicked() {
                                 *value = default;
                             }
                             ui.add_space(8.0);
-                            ui.label(RichText::new(format!("{:.1}", *value)).monospace().color(Color32::GRAY));
+                            
+                            // Interactive DragValue for manual input
+                            ui.add(egui::DragValue::new(value)
+                                .speed(0.01)
+                                .range(range.clone())
+                                .fixed_decimals(1)
+                            );
+                            
                             ui.add_space(8.0);
                             ui.add(egui::Slider::new(value, range).show_value(false).trailing_fill(true));
                         });
@@ -255,6 +273,39 @@ impl Overlay {
                 add_control(ui, "Saturation", &mut self.saturation, 0.0..=2.0, 1.0);
                 add_control(ui, "Hue", &mut self.hue, -1.0..=1.0, 0.0);
                 
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut self.use_sharpen, RichText::new("Use Sharpening").color(Color32::WHITE).size(12.0));
+                    if self.use_sharpen {
+                        ui.add(egui::Slider::new(&mut self.sharpening_amount, 0.0..=1.0).show_value(false).trailing_fill(true));
+                        ui.add_space(8.0);
+                        // Interactive DragValue for Sharpening
+                        ui.add(egui::DragValue::new(&mut self.sharpening_amount)
+                            .speed(0.01)
+                            .range(0.0..=1.0)
+                            .fixed_decimals(2)
+                        );
+                    }
+                });
+
+                ui.add_space(16.0);
+                ui.separator();
+                ui.add_space(8.0);
+
+                ui.heading(RichText::new("SHORTCUTS").strong().color(Color32::WHITE).size(14.0));
+                ui.add_space(6.0);
+                
+                let add_hotkey = |ui: &mut egui::Ui, key: &str, action: &str| {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(key).strong().color(Color32::from_rgb(0, 200, 255)).size(11.0));
+                        ui.label(RichText::new(action).color(Color32::GRAY).size(11.0));
+                    });
+                };
+                
+                add_hotkey(ui, "Shift + Esc", "- Exit Stealth Mode");
+                add_hotkey(ui, "Shift + F10", "- Toggle UI (Global)");
+                add_hotkey(ui, "Double Click", "- Toggle UI (Normal)");
+
                 ui.add_space(8.0);
             });
 
